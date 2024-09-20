@@ -36,7 +36,8 @@ class Post(BaseModel):
     author = models.ForeignKey(USER, on_delete=models.CASCADE,
                                verbose_name='Автор публикации')
     category = models.ForeignKey('Category', on_delete=models.SET_NULL,
-                                 null=True, verbose_name='Категория')
+                                 null=True, verbose_name='Категория',
+                                 related_name='posts')
     location = models.ForeignKey('Location', on_delete=models.SET_NULL,
                                  blank=False, null=True,
                                  verbose_name='Местоположение')
@@ -97,3 +98,5 @@ class Comment(BaseModel):
 
     class Meta:
         ordering = ('created_at',)
+        verbose_name = 'комментарий'
+        verbose_name_plural = 'Комментарии'

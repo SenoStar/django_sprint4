@@ -9,22 +9,57 @@ from django.contrib.auth.mixins import (LoginRequiredMixin,
 from django.views.generic import (
     DetailView, UpdateView, CreateView, DeleteView)
 from .models import Comment, Category, Post
-from .forms import (PostForm, UpdatePostModelForm, UpdateProfileModelForm,
+from .forms import (PostForm, UpdateProfileModelForm,
                     CommentForm, UpdateCommentModelForm)
+
+
+# Количество постов на одной странице.
+NUMBER_OF_POSTS = 10
+
+
+def paginator_settings(request,
+                       number_of_posts: int = 10,
+                       category: str = '',
+                       author: str = ''):
+    """Настройка пагинатора."""
+    if category != '':
+        post_list = Post.objects.annotate(
+            comment_count=Count("comments")
+        ).filter(
+            is_published=True, category__is_published=True,
+            pub_date__lte=timezone.now(), category=category
+        ).order_by('-pub_date')
+    elif author != '':
+        if author != request.user:
+            post_list = Post.objects.annotate(
+                comment_count=Count("comments")
+            ).filter(
+                author=author, is_published=True,
+                category__is_published=True,
+                pub_date__lte=timezone.now()
+            ).order_by('-pub_date')
+        else:
+            post_list = Post.objects.annotate(
+                comment_count=Count("comments")
+            ).filter(
+                author=author
+            ).order_by('-pub_date')
+    else:
+        post_list = Post.objects.annotate(
+            comment_count=Count("comments")
+        ).filter(
+            is_published=True, category__is_published=True,
+            pub_date__lte=timezone.now()).order_by('-pub_date')
+    paginator = Paginator(post_list, number_of_posts)
+    page_number = request.GET.get('page')
+    page_obj = paginator.get_page(page_number)
+    return page_obj
 
 
 def index(request):
     """Главная с постами."""
     template = 'blog/index.html'
-    post_list = Post.objects.annotate(
-        comment_count=Count("comments")
-    ).filter(
-        is_published=True, category__is_published=True,
-        pub_date__lte=timezone.now()
-    ).order_by('-pub_date')
-    paginator = Paginator(post_list, 10)
-    page_number = request.GET.get('page')
-    page_obj = paginator.get_page(page_number)
+    page_obj = paginator_settings(request, NUMBER_OF_POSTS)
     context = {'page_obj': page_obj}
     return render(request, template, context)
 
@@ -36,6 +71,7 @@ def post_detail(request, post_id):
         Post,
         id=post_id
     )
+    # Тут не CBV, поэтому отдельную функцию не буду делать))) лень.
     if request.user != post.author:
         post = get_object_or_404(
             Post,
@@ -61,17 +97,17 @@ def category_posts(request, category_slug):
         Category,
         slug=category_slug, is_published=True
     )
-    post_list = (Post.objects.annotate(comment_count=Count("comments")).
-                 filter(
-        is_published=True,
-        category=category,
-        pub_date__lte=timezone.now()
-    ).order_by('-pub_date'))
-    paginator = Paginator(post_list, 10)
-    page_number = request.GET.get('page')
-    page_obj = paginator.get_page(page_number)
+    page_obj = paginator_settings(request, NUMBER_OF_POSTS, category)
     context = {'category': category, 'page_obj': page_obj}
     return render(request, template, context)
+
+
+class AuthorVerificationMixin(UserPassesTestMixin):
+    """Проверка пользователя."""
+
+    def test_func(self):
+        post = self.get_object()
+        return self.request.user == post.author or self.request.user.is_staff
 
 
 class PostCreateView(LoginRequiredMixin, CreateView):
@@ -91,11 +127,12 @@ class PostCreateView(LoginRequiredMixin, CreateView):
                        kwargs={'username': self.request.user.username})
 
 
-class PostUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
+class PostUpdateView(LoginRequiredMixin, AuthorVerificationMixin,
+                     UpdateView):
     """Редактирование поста."""
 
     model = Post
-    form_class = UpdatePostModelForm
+    form_class = PostForm
     template_name = 'blog/create.html'
 
     def form_valid(self, form):
@@ -112,13 +149,6 @@ class PostUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
         return get_object_or_404(Post,
                                  id=self.kwargs['post_id'])
 
-    def test_func(self):
-        """Проверка пользователя."""
-        post = self.get_object()
-        if self.request.user == post.author or self.request.user.is_staff:
-            return True
-        return False
-
     def dispatch(self, request, *args, **kwargs):
         """Перенаправляем другого пользователя на страницу поста."""
         if not self.test_func():
@@ -126,7 +156,8 @@ class PostUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
         return super().dispatch(request, *args, **kwargs)
 
 
-class PostDeleteView(LoginRequiredMixin, UserPassesTestMixin, DeleteView):
+class PostDeleteView(LoginRequiredMixin, AuthorVerificationMixin,
+                     DeleteView):
     """Удаление поста."""
 
     model = Post
@@ -140,13 +171,6 @@ class PostDeleteView(LoginRequiredMixin, UserPassesTestMixin, DeleteView):
     def get_object(self):
         """Получаем пост."""
         return get_object_or_404(Post, id=self.kwargs['post_id'])
-
-    def test_func(self):
-        """Проверка пользователя."""
-        post = self.get_object()
-        if self.request.user == post.author:
-            return True
-        return False
 
     def dispatch(self, request, *args, **kwargs):
         """Перенаправляем другого пользователя на страницу поста."""
@@ -172,17 +196,9 @@ class ProfileDetailView(DetailView):
         context = super().get_context_data(**kwargs)
         context['profile'] = self.object
         user = self.request.user
-        user_posts = (Post.objects.
-                      annotate(comment_count=Count("comments")).
-                      filter(author=self.object).
-                      order_by('-pub_date'))
-        if self.object != user:
-            user_posts = user_posts.filter(is_published=True,
-                                           category__is_published=True,
-                                           pub_date__lte=timezone.now())
-        paginator = Paginator(user_posts, 10)
-        page_number = self.request.GET.get('page')
-        page_obj = paginator.get_page(page_number)
+        page_obj = paginator_settings(self.request,
+                                      NUMBER_OF_POSTS,
+                                      author=self.object)
         context['page_obj'] = page_obj
         context['user'] = user
         return context
@@ -230,7 +246,8 @@ class CommentCreateView(LoginRequiredMixin, CreateView):
                        kwargs={'post_id': self.post_obj.id})
 
 
-class CommentUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
+class CommentUpdateView(LoginRequiredMixin, AuthorVerificationMixin,
+                        UpdateView):
     """Редактирование комментариев."""
 
     model = Comment
@@ -245,13 +262,6 @@ class CommentUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
         return reverse('blog:post_detail',
                        kwargs={'post_id': self.kwargs['post_id']})
 
-    def test_func(self):
-        """Проверка пользователя."""
-        comment = self.get_object()
-        if self.request.user == comment.author:
-            return True
-        return False
-
     def dispatch(self, request, *args, **kwargs):
         """Перенаправляем другого пользователя на страницу поста."""
         if not self.test_func():
@@ -259,7 +269,8 @@ class CommentUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
         return super().dispatch(request, *args, **kwargs)
 
 
-class CommentDeleteView(LoginRequiredMixin, DeleteView):
+class CommentDeleteView(LoginRequiredMixin, AuthorVerificationMixin,
+                        DeleteView):
     """Удаление комментария."""
 
     model = Comment
@@ -272,13 +283,6 @@ class CommentDeleteView(LoginRequiredMixin, DeleteView):
     def get_success_url(self):
         return reverse('blog:post_detail',
                        kwargs={'post_id': self.kwargs['post_id']})
-
-    def test_func(self):
-        """Проверка пользователя."""
-        comment = self.get_object()
-        if self.request.user == comment.author:
-            return True
-        return False
 
     def dispatch(self, request, *args, **kwargs):
         """Перенаправляем другого пользователя на страницу поста."""

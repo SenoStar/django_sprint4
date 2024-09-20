@@ -9,16 +9,6 @@ class PostForm(forms.ModelForm):
         model = Post
         fields = ('title', 'text', 'pub_date', 'category', 'location', 'image')
         widgets = {
-            'pub_date': forms.DateInput(attrs={'type': 'date'})
-        }
-
-
-class UpdatePostModelForm(forms.ModelForm):
-
-    class Meta:
-        model = Post
-        fields = ('title', 'text', 'pub_date', 'category', 'location', 'image')
-        widgets = {
             'pub_date': forms.DateInput(attrs={'type': 'datetime'})
         }
 
